@@ -1,0 +1,56 @@
+name: CI
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [main]
+    paths:
+      - 'sre-copilot/**'
+      - '.github/workflows/pull-request.yml'
+
+# This is what will cancel the workflow
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: k8s-develop
+    environment: bundle
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare GITHUB_ENV
+        run: |
+          echo "COMPILED_AT=$(date +'%Y-%m-%dT%H:%M:%S')" >> $GITHUB_ENV
+          echo "GIT_TAG=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+          echo "SHORT_SHA=${GITHUB_SHA:0:8}" >> $GITHUB_ENV
+
+      - name: Print Pull Request Number
+        run: |
+          echo "Pull Request Number: ${{ github.event.pull_request.number }}"
+          echo "PR Number: ${{ github.event.pull_request.number }}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: sre-copilot
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        working-directory: sre-copilot
+        run: python -m ruff check .
+
+      - name: Test
+        working-directory: sre-copilot
+        env:
+          SRE_API_KEYS: test
+        run: pytest
