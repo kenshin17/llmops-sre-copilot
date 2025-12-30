@@ -73,11 +73,11 @@ jobs:
           IMAGE_TAG: ${{ steps.meta.outputs.version }}
         working-directory: sre-copilot
         run: |
-          set -e
+          # Create network if not exists (before set -e to ignore "already exists" error)
+          docker network create milvus-net 2>/dev/null || true
           
+          set -e
           cd ~/llmops-notes/sre-copilot
-          # Create network if not exists
-          docker network create milvus-net || true
           
           # Pull and deploy
           echo "Pulling image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG:-latest}"
