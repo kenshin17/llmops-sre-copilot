@@ -16,7 +16,6 @@ def create_app() -> FastAPI:
         title="AI SRE Copilot",
         description="Gateway, guardrails, routing, and retrieval demo.",
         version="0.1.0",
-        dependencies=[Depends(verify_api_key)],
     )
 
     app.include_router(create_api())

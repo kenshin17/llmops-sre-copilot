@@ -75,6 +75,9 @@ jobs:
 
       - name: Deploy locally
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy == 'true') }}
+        env:
+          # TODO: Move to secrets.SRE_API_KEY in production
+          SRE_API_KEY: local-key
         run: |
           # Create network if not exists (before set -e to ignore "already exists" error)
           docker network create milvus-net 2>/dev/null || true

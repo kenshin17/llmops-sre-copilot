@@ -3,7 +3,7 @@
 
 services:
   sre-copilot:
-    image: ghcr.io/${GITHUB_REPOSITORY:-ken/llmops-notes}/sre-copilot:${IMAGE_TAG:-latest}
+    image: sre-copilot:${IMAGE_TAG:-latest}
     container_name: sre-copilot
     restart: unless-stopped
     ports:
