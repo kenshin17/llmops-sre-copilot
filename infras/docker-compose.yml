@@ -305,8 +305,8 @@ services:
       AIRFLOW__LOGGING__LOG_BASE_URL: http://localhost:8080
       SRE_TEMPO_URL: http://tempo:3200
       SRE_LOKI_URL: http://10.8.8.10:30312
-      SRE_LOKI_QUERY: "{namespace=\"manadr-test-cms-iam-129\"}"
-      SRE_LOKI_TENANT: manadr
+      SRE_LOKI_QUERY: "{namespace=\"staging\"}"
+      SRE_LOKI_TENANT: example
       SRE_TEMPO_SERVICE: sre-copilot
       SRE_OLLAMA_BASE_URL: http://10.121.15.73:11434
       SRE_OLLAMA_MODEL: mxbai-embed-large
@@ -365,7 +365,7 @@ services:
       SRE_TEMPO_URL: http://tempo:3200
       SRE_LOKI_URL: http://10.8.8.10:30312
       SRE_LOKI_QUERY: "{namespace=\"staging\"}"
-      SRE_LOKI_TENANT: manadr
+      SRE_LOKI_TENANT: example
       SRE_TEMPO_SERVICE: sre-copilot
       SRE_OLLAMA_BASE_URL: http://10.121.15.73:11434
       SRE_OLLAMA_MODEL: mxbai-embed-large
