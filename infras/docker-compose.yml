@@ -1,0 +1,419 @@
+version: "3.9"
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: milvus-etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+      - ETCD_NAME=etcd
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd:2379
+      - ETCD_INITIAL_CLUSTER=etcd=http://etcd:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster
+    volumes:
+      - ./data/etcd:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    image: minio/minio:RELEASE.2024-09-22T00-33-43Z
+    container_name: milvus-minio
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9001:9001"
+    volumes:
+      - ./data/minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    image: milvusdb/milvus:v2.4.8
+    container_name: milvus-standalone
+    restart: unless-stopped
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    command: ["milvus", "run", "standalone"]
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - ./data/milvus:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: loki
+    command: ["-config.file=/etc/loki/local-config.yml"]
+    volumes:
+      - ./config/loki-config.yml:/etc/loki/local-config.yml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:v2.53.1
+    container_name: prometheus
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  tempo:
+    image: grafana/tempo:2.4.1
+    container_name: tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./config/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"   # HTTP / metrics / search
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3200/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+
+  langfuse-db:
+    image: postgres:15
+    container_name: langfuse-db
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+    volumes:
+      - langfuse-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: langfuse-clickhouse
+    environment:
+      CLICKHOUSE_DB: langfuse
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: langfuse
+    volumes:
+      - langfuse-clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  langfuse:
+    image: langfuse/langfuse:2.46.0
+    container_name: langfuse
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: 0123456789abcdef0123456789abcdef
+      SALT: abcdef0123456789abcdef0123456789
+      ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      TELEMETRY_ENABLED: "false"
+      ENABLE_SIGNUP: "true"
+      NEXTAUTH_URL: http://localhost:3101
+      NEXTAUTH_URL_INTERNAL: http://langfuse:3000
+      LANGFUSE_HOST: http://localhost:3101
+      CLICKHOUSE_URL: http://langfuse:langfuse@langfuse-clickhouse:8123/langfuse
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse:langfuse@langfuse-clickhouse:9000/langfuse
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: langfuse
+      CLICKHOUSE_DATABASE: langfuse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+    ports:
+      - "3101:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/public/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sre-redis
+    command: ["redis-server", "--save", "", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  attu:
+    image: zilliz/attu:latest
+    container_name: milvus-attu
+    environment:
+      MILVUS_URL: milvus:19530
+    ports:
+      - "8000:3000"
+    depends_on:
+      milvus:
+        condition: service_healthy
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./config/promtail-config.yml:/etc/promtail/config.yml:ro
+      - airflow-logs:/var/log/airflow:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9080/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  airflow-postgres:
+    image: postgres:13
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+
+  airflow-init:
+    image: airflow-ken:2.9.3
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -ex
+        rm -rf /tmp/sre-copilot && cp -r /opt/airflow/sre-copilot /tmp/sre-copilot
+        pip install --no-deps /tmp/sre-copilot
+        pip install "pydantic>=2.10.0" "pydantic-settings>=2.9.1" "httpx>=0.27.2" \
+          "openai>=1.55.3" "pymilvus>=2.4.6,<2.5.0" "requests>=2.32.3"
+        airflow db migrate
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth
+      AIRFLOW__LOGGING__LOG_SERVER_HOST: localhost
+      AIRFLOW__LOGGING__LOG_SERVER_PORT: "8080"
+      AIRFLOW__LOGGING__LOG_BASE_URL: http://localhost:8080
+      SRE_TEMPO_URL: http://tempo:3200
+      PYTHONPATH: /opt/airflow/sre-copilot/src
+      _PIP_ADDITIONAL_REQUIREMENTS: /opt/airflow/sre-copilot
+      SRE_MILVUS_URI: http://milvus:19530
+      AIRFLOW__WEBSERVER__WEB_SERVER_HOST: 0.0.0.0
+    user: "50000:0"
+    volumes:
+      - ../sre-copilot/airflow/dags:/opt/airflow/dags:ro
+      - ../sre-copilot:/opt/airflow/sre-copilot:ro
+      - airflow-logs:/opt/airflow/logs
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+
+  airflow-webserver:
+    image: airflow-ken:2.9.3
+    container_name: airflow-webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth
+      AIRFLOW__WEBSERVER__RBAC: "True"
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+      AIRFLOW__LOGGING__LOG_SERVER_HOST: localhost
+      AIRFLOW__LOGGING__LOG_SERVER_PORT: "8080"
+      AIRFLOW__LOGGING__LOG_BASE_URL: http://localhost:8080
+      SRE_TEMPO_URL: http://tempo:3200
+      SRE_LOKI_URL: http://10.8.8.10:30312
+      SRE_LOKI_QUERY: "{namespace=\"staging\"}"
+      SRE_LOKI_TENANT: example
+      SRE_TEMPO_SERVICE: sre-copilot
+      SRE_OLLAMA_BASE_URL: http://10.121.15.73:11434
+      SRE_OLLAMA_MODEL: mxbai-embed-large
+      SRE_OLLAMA_CHAT_MODEL: gpt-oss:20b
+      SRE_OLLAMA_EMBED_MODEL: mxbai-embed-large
+      PYTHONPATH: /opt/airflow/sre-copilot/src
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+      _PIP_ADDITIONAL_REQUIREMENTS: /opt/airflow/sre-copilot
+      SRE_MILVUS_URI: http://milvus:19530
+      AIRFLOW__WEBSERVER__WEB_SERVER_HOST: 0.0.0.0
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -ex
+        rm -rf /tmp/sre-copilot && cp -r /opt/airflow/sre-copilot /tmp/sre-copilot
+        pip install --no-deps /tmp/sre-copilot
+        pip install "pydantic>=2.10.0" "pydantic-settings>=2.9.1" "httpx>=0.27.2" \
+          "openai>=1.55.3" "pymilvus>=2.4.6,<2.5.0" "requests>=2.32.3"
+        exec airflow webserver
+    ports:
+      - "8080:8080"
+      - "8793:8793"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    user: "50000:0"
+    volumes:
+      - ../sre-copilot/airflow/dags:/opt/airflow/dags:ro
+      - ../sre-copilot:/opt/airflow/sre-copilot:ro
+      - airflow-logs:/opt/airflow/logs
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    image: airflow-ken:2.9.3
+    container_name: airflow-scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+      AIRFLOW__LOGGING__LOG_SERVER_HOST: localhost
+      AIRFLOW__LOGGING__LOG_SERVER_PORT: "8080"
+      AIRFLOW__LOGGING__LOG_BASE_URL: http://localhost:8080
+      SRE_TEMPO_URL: http://tempo:3200
+      SRE_LOKI_URL: http://10.8.8.10:30312
+      SRE_LOKI_QUERY: "{namespace=\"staging\"}"
+      SRE_LOKI_TENANT: example
+      SRE_TEMPO_SERVICE: sre-copilot
+      SRE_OLLAMA_BASE_URL: http://10.121.15.73:11434
+      SRE_OLLAMA_MODEL: mxbai-embed-large
+      SRE_OLLAMA_CHAT_MODEL: gpt-oss:20b
+      SRE_OLLAMA_EMBED_MODEL: mxbai-embed-large
+      PYTHONPATH: /opt/airflow/sre-copilot/src
+      _PIP_ADDITIONAL_REQUIREMENTS: /opt/airflow/sre-copilot
+      SRE_MILVUS_URI: http://milvus:19530
+      AIRFLOW__WEBSERVER__WEB_SERVER_HOST: 0.0.0.0
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -ex
+        rm -rf /tmp/sre-copilot && cp -r /opt/airflow/sre-copilot /tmp/sre-copilot
+        pip install --no-deps /tmp/sre-copilot
+        pip install "pydantic>=2.10.0" "pydantic-settings>=2.9.1" "httpx>=0.27.2" \
+          "openai>=1.55.3" "pymilvus>=2.4.6,<2.5.0" "requests>=2.32.3"
+        exec airflow scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    user: "50000:0"
+    volumes:
+      - ../sre-copilot/airflow/dags:/opt/airflow/dags:ro
+      - ../sre-copilot:/opt/airflow/sre-copilot:ro
+      - airflow-logs:/opt/airflow/logs
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+networks:
+  default:
+    name: milvus-net
+
+volumes:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  grafana-data:
+  langfuse-db-data:
+  langfuse-clickhouse-data:
+  redis-data:
+  airflow-postgres-data:
+  airflow-logs:
