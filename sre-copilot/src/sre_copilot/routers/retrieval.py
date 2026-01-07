@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends
 
 from sre_copilot.middleware.auth import verify_api_key
-from sre_copilot.middleware.rate_limit import enforce_rate_limit
 from sre_copilot.schemas.retrieval import (
     AnswerResponse,
     QueryRequest,
@@ -10,7 +9,7 @@ from sre_copilot.schemas.retrieval import (
 from sre_copilot.services.retrieval import RetrievalService, get_retrieval_service
 from sre_copilot.guardrails import GuardrailsEngine
 
-router = APIRouter(dependencies=[Depends(verify_api_key), Depends(enforce_rate_limit)])
+router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 
 @router.post("/search", response_model=SearchResponse)

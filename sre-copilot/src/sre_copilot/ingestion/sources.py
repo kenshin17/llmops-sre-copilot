@@ -10,7 +10,7 @@ from sre_copilot.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def _window(settings, now: dt.datetime | None = None) -> tuple[str, str]:
+def calculate_window(settings, now: dt.datetime | None = None) -> tuple[str, str]:
     now = now or dt.datetime.utcnow()
     end = now
     start = end - dt.timedelta(minutes=settings.ingest_lookback_minutes)
@@ -20,7 +20,7 @@ def _window(settings, now: dt.datetime | None = None) -> tuple[str, str]:
 async def fetch_loki_logs(settings) -> List[str]:
     if not settings.loki_url:
         return []
-    start, end = _window(settings)
+    start, end = calculate_window(settings)
     query = settings.loki_query or '{job!=""}'
     params = {"query": query, "start": start, "end": end}
     headers = {}
@@ -60,7 +60,7 @@ async def fetch_loki_logs(settings) -> List[str]:
 async def fetch_prometheus_metrics(settings) -> List[str]:
     if not settings.prom_url:
         return []
-    start, end = _window(settings)
+    start, end = calculate_window(settings)
     params = {
         "query": settings.prom_query,
         "start": start,

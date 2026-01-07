@@ -3,7 +3,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sre_copilot.config import Settings, get_settings
 
 
-async def verify_api_key(
+def verify_api_key(
     request: Request,
     settings: Settings = Depends(get_settings),
 ) -> None:

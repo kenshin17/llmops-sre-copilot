@@ -8,6 +8,9 @@ import httpx
 from openai import AsyncOpenAI
 
 from sre_copilot.config import Settings
+from sre_copilot.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class EmbeddingService:
@@ -24,6 +27,7 @@ class EmbeddingService:
             self.provider = "ollama"
 
         self.model = "text-embedding-3-small"
+        self.http_client = httpx.AsyncClient(timeout=settings.http_timeout)
 
     async def embed(self, text: str) -> List[float]:
         model = self.settings.ollama_embed_model or self.settings.ollama_model
@@ -34,18 +38,17 @@ class EmbeddingService:
 
         if self.provider == "ollama" and self.settings.ollama_base_url:
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(
-                        f"{self.settings.ollama_base_url}/api/embeddings",
-                        json={"model": model, "prompt": text},
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    vec = data.get("embedding") or data.get("data") or []
-                    return self._normalize(vec)
-            except Exception:
+                resp = await self.http_client.post(
+                    f"{self.settings.ollama_base_url}/api/embeddings",
+                    json={"model": model, "prompt": text},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                vec = data.get("embedding") or data.get("data") or []
+                return self._normalize(vec)
+            except Exception as exc:
                 # fall back to hash below
-                pass
+                logger.warning("Ollama embedding failed, falling back to hash: %s", exc)
 
         # Fallback deterministic hash embedding
         digest = hashlib.sha256(text.encode("utf-8")).digest()
@@ -62,19 +65,18 @@ class EmbeddingService:
             model = self.settings.ollama_embed_model or self.settings.ollama_model
             results: list[list[float]] = []
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    for text in texts_list:
-                        resp = await client.post(
-                            f"{self.settings.ollama_base_url}/api/embeddings",
-                            json={"model": model, "prompt": text},
-                        )
-                        resp.raise_for_status()
-                        data = resp.json()
-                        vec = data.get("embedding") or data.get("data") or []
-                        results.append(self._normalize(vec))
+                for text in texts_list:
+                    resp = await self.http_client.post(
+                        f"{self.settings.ollama_base_url}/api/embeddings",
+                        json={"model": model, "prompt": text},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    vec = data.get("embedding") or data.get("data") or []
+                    results.append(self._normalize(vec))
                 return results
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Ollama batch embedding failed, falling back to hash: %s", exc)
 
         # Fallback deterministic hash embeddings
         vectors: list[list[float]] = []

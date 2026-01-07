@@ -28,7 +28,6 @@ class Settings(BaseSettings):
     milvus_password: str | None = None
     search_top_k: int = 3
 
-    rate_limit_per_minute: int = 60
     redis_url: str | None = None
 
     langfuse_base_url: str | None = None
@@ -52,6 +51,7 @@ class Settings(BaseSettings):
     query_rewrite_enabled: bool = False
     cache_enabled: bool = True
     cache_ttl_seconds: int = 300
+    http_timeout: float = 30.0
 
     @field_validator("api_keys", mode="before")
     @classmethod
