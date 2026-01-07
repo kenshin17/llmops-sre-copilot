@@ -1,0 +1,34 @@
+# SRE Copilot Application
+# Requires: infras/docker-compose.yml running (Milvus, Redis, Langfuse, etc.)
+
+services:
+  sre-copilot:
+    image: sre-copilot:${IMAGE_TAG:-latest}
+    container_name: sre-copilot
+    restart: unless-stopped
+    ports:
+      - "8055:8055"
+    env_file:
+      - .env
+    environment:
+      # Override for container networking (connect to infras services)
+      SRE_MILVUS_URI: http://milvus-standalone:19530
+      SRE_REDIS_URL: redis://sre-redis:6379/0
+      SRE_LANGFUSE_BASE_URL: http://langfuse:3000
+      SRE_OTEL_ENDPOINT: http://tempo:4317
+      SRE_LOKI_URL: http://loki:3100
+      SRE_PROM_URL: http://prometheus:9090
+      SRE_TEMPO_URL: http://tempo:3200
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8055/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - milvus-net
+
+networks:
+  milvus-net:
+    name: milvus-net
+    external: true
